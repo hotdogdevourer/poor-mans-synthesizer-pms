@@ -1,4 +1,3 @@
-
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -201,7 +200,7 @@ static const PhonemeDBEntry g_phoneme_db[] = {
     {"th", 130,{200, 900,2200,3200,4200,5200,6200,7200,8200,9200},
                {300, 400, 500, 500, 500, 500, 500, 500, 500, 500},0.00f,0.20f,0.60f,  0},
     {"h",   80,{700,1200,2600,3500,4500,5500,6500,7500,8500,9500},
-               {200, 300, 300, 400, 400, 400, 400, 400, 400, 400},0.00f,0.70f,0.20f,  0},
+               {200, 300, 300, 400, 400, 400, 400, 400, 400, 400},0.00f,0.20f,0.00f,  0},
     {"b",   80,{200, 900,2100,3100,4100,5100,6100,7100,8100,9100},
                {200, 300, 300, 400, 400, 400, 400, 400, 400, 400},0.70f,0.40f,0.60f, 80},
     {"d",   80,{300,1700,2500,3300,4300,5300,6300,7300,8300,9300},
@@ -293,6 +292,7 @@ typedef struct {
     float voicing_amp;
     float aspiration_amp;
     float frication_amp;
+    int   plosive_type;                                                    
 } PhonemeInst;
 
 typedef struct {
@@ -332,7 +332,7 @@ typedef struct {
 static const VoicePreset g_preset_natural = {
     {700,1220,2600,3540,4500,5500,6500,7500,8500,9500},
     {110, 130, 110, 130, 140, 150, 160, 170, 180, 190},
-    0.70f, 0.25f, 0.00f, 120.0f, 1.5f, 5.5f, 1.0f, 2.0f
+    2.5f, 0.12f, 0.00f, 120.0f, 1.5f, 5.5f, 1.0f, 2.0f
 };
 static const VoicePreset g_preset_breathy = {
     {700,1220,2600,3540,4500,5500,6500,7500,8500,9500},
@@ -670,6 +670,15 @@ static int phoneme_parse(const char *path, PhonemeData *pd)
             ph->voicing_amp    = dbe->voicing_amp;
             ph->aspiration_amp = dbe->aspiration_amp;
             ph->frication_amp  = dbe->frication_amp;
+            {
+                const char *n = ph->name;
+                if (strcasecmp(n,"p")==0||strcasecmp(n,"t")==0||strcasecmp(n,"k")==0)
+                    ph->plosive_type = 1;                 
+                else if (strcasecmp(n,"b")==0||strcasecmp(n,"d")==0||strcasecmp(n,"g")==0)
+                    ph->plosive_type = 2;              
+                else
+                    ph->plosive_type = 0;
+            }
         } else {
             float df[]={700,1220,2600,3540,4500,5500,6500,7500,8500,9500};
             float db[]={110, 130, 110, 130, 140, 150, 160, 170, 180, 190};
@@ -778,7 +787,7 @@ static int synthesize(SynthState *st, float **out, int *out_n)
     if (st->mode == MODE_PHONEME && st->phon.nphon > 0) {
         float total = 0.0f;
         for (int i=0;i<st->phon.nphon;i++) total+=st->phon.phonemes[i].duration_ms;
-        float needed = total/1000.0f + 0.2f;
+        float needed = total/1000.0f + 0.05f;
         if (dur < needed) dur = needed;
     }
     if (st->mode == MODE_SPEC) {
@@ -793,7 +802,7 @@ static int synthesize(SynthState *st, float **out, int *out_n)
     float *buf = (float*)calloc(N, sizeof(float));
     if (!buf){ fprintf(stderr,"Error: out of memory (%d samples)\n",N); return -1; }
 
-    Biquad asp, fric;
+    Biquad asp, fric, burst_filt;
     make_highpass(&asp,
                   st->aspiration_cutoff > 10.0f ? st->aspiration_cutoff : 500.0f,
                   (float)sr);
@@ -801,6 +810,7 @@ static int synthesize(SynthState *st, float **out, int *out_n)
                   st->frication_center      > 10.0f ? st->frication_center      : 4000.0f,
                   st->frication_bandwidth   > 10.0f ? st->frication_bandwidth   : 2000.0f,
                   (float)sr);
+    make_highpass(&burst_filt, 800.0f, (float)sr);
 
     for (int k=0;k<MAX_FORMANTS;k++) formant_reset(&st->formants[k]);
     st->pitch_phase   = 0.0f;
@@ -825,9 +835,17 @@ static int synthesize(SynthState *st, float **out, int *out_n)
             phon_sb[0][k] = st->formants[k].bw   > 0 ? st->formants[k].bw  : 110.0f;
         }
         for (int i=1;i<np;i++){
+            const char *prev_name = st->phon.phonemes[i-1].name;
+            int prev_is_sil = (strcasecmp(prev_name,"sil")==0 ||
+                               strcmp(prev_name,"_")==0);
             for(int k=0;k<MAX_FORMANTS;k++){
-                phon_sf[i][k] = st->phon.phonemes[i-1].target_freq[k];
-                phon_sb[i][k] = st->phon.phonemes[i-1].target_bw  [k];
+                if (prev_is_sil) {
+                    phon_sf[i][k] = st->phon.phonemes[i].target_freq[k];
+                    phon_sb[i][k] = st->phon.phonemes[i].target_bw  [k];
+                } else {
+                    phon_sf[i][k] = st->phon.phonemes[i-1].target_freq[k];
+                    phon_sb[i][k] = st->phon.phonemes[i-1].target_bw  [k];
+                }
             }
         }
     }
@@ -839,6 +857,7 @@ static int synthesize(SynthState *st, float **out, int *out_n)
     float sm_v    = st->voicing_amp;
     float sm_a    = st->aspiration_amp;
     float sm_fr   = st->frication_amp;
+    int   is_burst = 0;                                          
 
     for (int n = 0; n < N; n++) {
         float t_ms = (float)n / sr * 1000.0f;
@@ -878,7 +897,7 @@ static int synthesize(SynthState *st, float **out, int *out_n)
                     else { pi=mid; break; }
                 }
             } else {
-                pi = np - 1;                                 
+                pi = -1;                                                              
             }
 
             if (pi >= 0) {
@@ -888,9 +907,47 @@ static int synthesize(SynthState *st, float **out, int *out_n)
                 float pct    = clampf(t_within / dur_ph, 0.0f, 1.0f);
 
                 f0     = phon_pitch(ph, t_within);
-                v_amp  = ph->voicing_amp;
-                a_amp  = ph->aspiration_amp;
+                v_amp  = ph->voicing_amp    * st->voicing_amp;
+                a_amp  = ph->aspiration_amp * st->aspiration_amp;
                 fr_amp = ph->frication_amp;
+
+                if (ph->plosive_type > 0) {
+                    float burst_env = 0.0f;
+                    if (pct < 0.40f) {
+                        if (ph->plosive_type == 2) {
+                            v_amp  = 0.18f;
+                            a_amp  = 0.0f;
+                            fr_amp = 0.0f;
+                        } else {
+                            v_amp = 0.0f; a_amp = 0.0f; fr_amp = 0.0f;
+                        }
+                        f0 = (ph->plosive_type == 2) ? phon_pitch(ph, t_within) : 0.0f;
+                        is_burst = 0;
+                    } else if (pct < 0.55f) {
+                        float bp = (pct - 0.40f) / 0.15f;                              
+                        burst_env = sinf(bp * PI_F);                               
+                        v_amp  = 0.0f;
+                        a_amp  = 0.0f;
+                        fr_amp = 1.4f * burst_env;
+                        f0     = 0.0f;
+                        is_burst = 1;
+                    } else {
+                        float rp = (pct - 0.55f) / 0.45f;                                 
+                        if (ph->plosive_type == 1) {
+                            v_amp  = 0.0f;
+                            a_amp  = ph->aspiration_amp * st->aspiration_amp * rp;
+                            fr_amp = 0.0f;
+                        } else {
+                            v_amp  = ph->voicing_amp    * st->voicing_amp     * rp;
+                            a_amp  = ph->aspiration_amp * st->aspiration_amp  * (1.0f - rp);
+                            fr_amp = 0.0f;
+                        }
+                        is_burst = 0;
+                    }
+                    (void)burst_env;
+                } else {
+                    is_burst = 0;
+                }
 
                 for (int k=0;k<MAX_FORMANTS;k++){
                     freq [k] = lerpf(phon_sf[pi][k], ph->target_freq[k], pct);
@@ -945,7 +1002,10 @@ static int synthesize(SynthState *st, float **out, int *out_n)
         }
 
         float a_sig  = sm_a  > 1e-5f ? biquad_process(&asp,  white_noise()) * sm_a  : 0.0f;
-        float fr_sig = sm_fr > 1e-5f ? biquad_process(&fric, white_noise()) * sm_fr : 0.0f;
+        float fr_sig = sm_fr > 1e-5f
+            ? (is_burst ? biquad_process(&burst_filt, white_noise())
+                        : biquad_process(&fric,       white_noise())) * sm_fr
+            : 0.0f;
 
         float excitation = v_sig + a_sig;
 
@@ -1030,6 +1090,7 @@ static void print_help(void)
     puts("  --frication-center HZ    Centre frequency of frication noise (default: 4000)");
     puts("  --frication-bandwidth HZ Bandwidth of frication noise (default: 2000)\n");
     puts("Output Options:");
+    puts("  --output FILE            Output filename (default: output.wav)");
     puts("  --output-format FORMAT   wav16|wav32|raw16|raw32 (default: wav16)");
     puts("  --normalize              Enable loudness normalization (default: enabled)");
     puts("  --no-lip-radiation       Disable lip radiation filter");
@@ -1204,6 +1265,8 @@ static int parse_args(int argc, char **argv, SynthState *st)
         if (!strcmp(a,"--aspiration-cutoff")){ NEED_VAL(a); st->aspiration_cutoff=(float)atof(argv[++i]); continue; }
         if (!strcmp(a,"--frication-center")) { NEED_VAL(a); st->frication_center  =(float)atof(argv[++i]); continue; }
         if (!strcmp(a,"--frication-bandwidth")){ NEED_VAL(a); st->frication_bandwidth=(float)atof(argv[++i]); continue; }
+
+        if (!strcmp(a,"--output")){ NEED_VAL(a); strncpy(st->output_filename,argv[++i],511); continue; }
 
         if (!strcmp(a,"--output-format")){
             NEED_VAL(a); const char *f=argv[++i];
