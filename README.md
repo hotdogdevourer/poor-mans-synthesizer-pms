@@ -1,4 +1,4 @@
-# Simple M-GS (Multi-Glottal Synthesizer)
+# Poor Man's Synthesizer (PMS)
 
 A very small program that makes computer sounds. It reads text files and writes WAV files. That's it.
 
@@ -25,16 +25,16 @@ A very small program that makes computer sounds. It reads text files and writes 
 Compile it with whatever C compiler you have:
 
 ```bash
-gcc mg1.c -o mgs -lm
+gcc pms.c -o pms -lm
 ```
 
 Run it in "demo" mode to hear a default voice:
 
 ```bash
-./mgs --demo natural output.wav
+./pms --demo natural output.wav
 ```
 
-Type `./mgs --help` to see the list of basic flags.
+Type `./pms --help` to see the list of basic flags.
 
 ---
 
@@ -80,13 +80,13 @@ Once your script is ready, run the engine in phoneme mode using the `--phoneme` 
 
 ```bash
 # Generate speech from your script
-./mgs --phoneme speech.txt output.wav
+./pms --phoneme speech.txt output.wav
 
 # Customize the voice character
-./mgs --phoneme speech.txt --voice breathy --f0 90 --jitter 2.0 --shimmer 3.0 output.wav
+./pms --phoneme speech.txt --voice breathy --f0 90 --jitter 2.0 --shimmer 3.0 output.wav
 
 # High fidelity output
-./mgs --phoneme speech.txt --sample-rate 44100 --output-format wav32 output.wav
+./pms --phoneme speech.txt --sample-rate 44100 --output-format wav32 output.wav
 ```
 
 #### 3. Understanding the Engine Parameters
