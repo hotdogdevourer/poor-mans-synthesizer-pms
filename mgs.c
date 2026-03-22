@@ -292,7 +292,7 @@ typedef struct {
     float voicing_amp;
     float aspiration_amp;
     float frication_amp;
-    int   plosive_type;                                                    
+    int   plosive_type;   /* 0=none  1=voiceless(p/t/k)  2=voiced(b/d/g) */
 } PhonemeInst;
 
 typedef struct {
@@ -670,12 +670,13 @@ static int phoneme_parse(const char *path, PhonemeData *pd)
             ph->voicing_amp    = dbe->voicing_amp;
             ph->aspiration_amp = dbe->aspiration_amp;
             ph->frication_amp  = dbe->frication_amp;
+            /* Classify plosives for closure/burst/release synthesis */
             {
                 const char *n = ph->name;
                 if (strcasecmp(n,"p")==0||strcasecmp(n,"t")==0||strcasecmp(n,"k")==0)
-                    ph->plosive_type = 1;                 
+                    ph->plosive_type = 1;  /* voiceless */
                 else if (strcasecmp(n,"b")==0||strcasecmp(n,"d")==0||strcasecmp(n,"g")==0)
-                    ph->plosive_type = 2;              
+                    ph->plosive_type = 2;  /* voiced */
                 else
                     ph->plosive_type = 0;
             }
@@ -810,6 +811,8 @@ static int synthesize(SynthState *st, float **out, int *out_n)
                   st->frication_center      > 10.0f ? st->frication_center      : 4000.0f,
                   st->frication_bandwidth   > 10.0f ? st->frication_bandwidth   : 2000.0f,
                   (float)sr);
+    /* Plosive burst: wide HP centred ~1 kHz to give the broad-spectrum
+     * transient character of a real stop release.                        */
     make_highpass(&burst_filt, 800.0f, (float)sr);
 
     for (int k=0;k<MAX_FORMANTS;k++) formant_reset(&st->formants[k]);
@@ -835,6 +838,8 @@ static int synthesize(SynthState *st, float **out, int *out_n)
             phon_sb[0][k] = st->formants[k].bw   > 0 ? st->formants[k].bw  : 110.0f;
         }
         for (int i=1;i<np;i++){
+            /* If prev phoneme is SIL/_, don't coarticulate from it — start
+             * at own target so SIL doesn't drag formants through neutral. */
             const char *prev_name = st->phon.phonemes[i-1].name;
             int prev_is_sil = (strcasecmp(prev_name,"sil")==0 ||
                                strcmp(prev_name,"_")==0);
@@ -857,7 +862,7 @@ static int synthesize(SynthState *st, float **out, int *out_n)
     float sm_v    = st->voicing_amp;
     float sm_a    = st->aspiration_amp;
     float sm_fr   = st->frication_amp;
-    int   is_burst = 0;                                          
+    int   is_burst = 0;   /* 1 when inside plosive burst phase */
 
     for (int n = 0; n < N; n++) {
         float t_ms = (float)n / sr * 1000.0f;
@@ -897,7 +902,7 @@ static int synthesize(SynthState *st, float **out, int *out_n)
                     else { pi=mid; break; }
                 }
             } else {
-                pi = -1;                                                              
+                pi = -1;  /* after last phoneme: silence + let offset ramp fade out */
             }
 
             if (pi >= 0) {
@@ -907,14 +912,22 @@ static int synthesize(SynthState *st, float **out, int *out_n)
                 float pct    = clampf(t_within / dur_ph, 0.0f, 1.0f);
 
                 f0     = phon_pitch(ph, t_within);
-                v_amp  = ph->voicing_amp    * st->voicing_amp;
-                a_amp  = ph->aspiration_amp * st->aspiration_amp;
+                v_amp  = ph->voicing_amp;
+                a_amp  = ph->aspiration_amp;
                 fr_amp = ph->frication_amp;
 
+                /* ---- Plosive: closure → burst → release ----
+                 *  0 – 40%  closure:  silence (voiceless) or murmur (voiced)
+                 * 40 – 55%  burst:    sharp broadband noise spike
+                 * 55 – 100% release:  aspiration (voiceless) / voicing (voiced)
+                 * The one-pole smoother on sm_v/sm_a/sm_fr already softens
+                 * the burst edges so we don't need extra windowing here.     */
                 if (ph->plosive_type > 0) {
                     float burst_env = 0.0f;
                     if (pct < 0.40f) {
+                        /* closure */
                         if (ph->plosive_type == 2) {
+                            /* voiced bar: soft low voicing only */
                             v_amp  = 0.18f;
                             a_amp  = 0.0f;
                             fr_amp = 0.0f;
@@ -924,22 +937,26 @@ static int synthesize(SynthState *st, float **out, int *out_n)
                         f0 = (ph->plosive_type == 2) ? phon_pitch(ph, t_within) : 0.0f;
                         is_burst = 0;
                     } else if (pct < 0.55f) {
-                        float bp = (pct - 0.40f) / 0.15f;                              
-                        burst_env = sinf(bp * PI_F);                               
+                        /* burst: sine-envelope broadband transient */
+                        float bp = (pct - 0.40f) / 0.15f;        /* 0→1 within burst */
+                        burst_env = sinf(bp * PI_F);               /* 0→1→0 arch */
                         v_amp  = 0.0f;
                         a_amp  = 0.0f;
                         fr_amp = 1.4f * burst_env;
                         f0     = 0.0f;
                         is_burst = 1;
                     } else {
-                        float rp = (pct - 0.55f) / 0.45f;                                 
+                        /* release: VOT for voiceless, voicing for voiced */
+                        float rp = (pct - 0.55f) / 0.45f;         /* 0→1 within release */
                         if (ph->plosive_type == 1) {
+                            /* voiceless: fade-in aspiration, no voicing */
                             v_amp  = 0.0f;
-                            a_amp  = ph->aspiration_amp * st->aspiration_amp * rp;
+                            a_amp  = ph->aspiration_amp * rp;
                             fr_amp = 0.0f;
                         } else {
-                            v_amp  = ph->voicing_amp    * st->voicing_amp     * rp;
-                            a_amp  = ph->aspiration_amp * st->aspiration_amp  * (1.0f - rp);
+                            /* voiced: fade-in voicing */
+                            v_amp  = ph->voicing_amp * rp;
+                            a_amp  = ph->aspiration_amp * (1.0f - rp);
                             fr_amp = 0.0f;
                         }
                         is_burst = 0;
