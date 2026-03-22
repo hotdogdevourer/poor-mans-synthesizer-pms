@@ -40,13 +40,7 @@ Type `./mgs --help` to see the list of basic flags.
 
 ## Advanced Phoneme Synthesis (The Nerd Stuff)
 
-Okay, the "simple" description above is technically true, but if you want to actually **specify speech** instead of just... AAAAA, you need to use the **Phoneme Mode**. 
-
-Under the hood, `mg1.c` contains a full Klatt-style formant synthesizer with:
-*   **40+ Built-in Phonemes**: Vowels (`a`, `e`, `i`, `o`, `u`), consonants (`s`, `z`, `sh`, `th`), nasals (`m`, `n`, `ng`), and diphthongs (`ai`, `au`).
-*   **Dynamic Formant Tracking**: Each phoneme has defined frequencies and bandwidths for up to **10 formants**.
-*   **Prosody Control**: You can define pitch contours, vibrato, jitter, and shimmer per phoneme.
-*   **Excitation Mixing**: Separate control over Voicing (glottal pulse), Aspiration (breath), and Frication (noise).
+Okay, the "simple" description above is technically true, but if you want to actually **specify speech** instead of just... AAAAA, you need to use the **Phoneme Mode** or the **Phoneme specification mode**, or (I swear this the last one) **Specification Frames Mode**. 
 
 ### How to Create a Voice
 
@@ -60,14 +54,15 @@ Create a file called `speech.txt`.
 h 100
 e 100
 l 100
-o 200
-w 400
-# For "HELLO"
-e 100
-v 200
-r 100
-y 200
+o 100
 w 100
+# For "HELLO"
+sil 100
+e 100
+v 100
+er 50
+y 100
+w 50
 a 200
 n 100
 sil 100
