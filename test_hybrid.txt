@@ -1,0 +1,6 @@
+SYNTHESIS_MODE hybrid
+a 500
+e 500
+i 500
+o 500
+u 500
