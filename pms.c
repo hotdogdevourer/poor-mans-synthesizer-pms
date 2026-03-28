@@ -8,15 +8,15 @@
 #include <errno.h>
 #include <math.h>
 
-#define VERSION_STR         "2.|.5-26032026"
+#define VERSION_STR         "3.|.0-26032026"
 #define VERSION_FMT         "R.I.B-DDMMYYYY (R meaning Release, I meaning 1 character version identification, and B meaning bugfix, DD meaning 2 digit day, MM meaning 2 digit month and YYYY meaning 4 digit year.)"
 #define MAX_SPEC_FRAMES     8192
-#define MAX_PHONEMES        1024
+#define MAX_PHONEMES        4096
 #define MAX_PITCH_POINTS    32
 #define MAX_ANCHORS         64
 #define MAX_CONTOUR_PTS     8192
 #define MAX_SAMPLES         (48000 * 120)
-#define MAX_FORMANTS        10                          
+#define MAX_FORMANTS        100                         
 int FORMANTS              = 10;
 
 #define PI_F                3.14159265358979323846f
@@ -25,7 +25,7 @@ int FORMANTS              = 10;
 
 typedef enum { MODE_DEMO = 0, MODE_SPEC = 1, MODE_PHONEME = 2 } SynthMode;
 typedef enum { VOICE_NATURAL = 0, VOICE_WHISPER = 1, VOICE_IMPULSIVE = 2 } VoiceType;
-typedef enum { FILTER_CASCADE = 0, FILTER_PARALLEL = 1 } FilterMode;
+typedef enum { FILTER_CASCADE = 0, FILTER_PARALLEL = 1, FILTER_HYBRID = 2 } FilterMode;
 typedef enum { FMT_WAV16 = 0, FMT_WAV32 = 1, FMT_RAW16 = 2, FMT_RAW32 = 3 } OutFormat;
 
 
@@ -142,6 +142,9 @@ typedef struct {
     float   dur_ms;
     float   freq[MAX_FORMANTS];
     float   bw  [MAX_FORMANTS];
+    float   antipole_freq[MAX_FORMANTS];
+    float   antipole_bw[MAX_FORMANTS];
+    int     use_antipoles;
     float   voicing_amp;
     float   aspiration_amp;
     float   frication_amp;
@@ -149,80 +152,125 @@ typedef struct {
 } PhonemeDBEntry;
 
 static const PhonemeDBEntry g_phoneme_db[] = {
+    /* Vowels - no antipoles */
     {"a",  250,{700,1220,2600,3540,4500,5500,6500,7500,8500,9500},
-               {110, 130, 110, 130, 140, 150, 160, 170, 180, 190},0.90f,0.10f,0.00f,120},
+               {110, 130, 110, 130, 140, 150, 160, 170, 180, 190},
+               {0,0,0,0,0,0,0,0,0,0},{0,0,0,0,0,0,0,0,0,0},0,0.90f,0.10f,0.00f,120},
     {"e",  220,{550,1770,2300,3260,4300,5300,6300,7300,8300,9300},
-               {110, 130, 110, 130, 140, 150, 160, 170, 180, 190},0.90f,0.10f,0.00f,120},
+               {110, 130, 110, 130, 140, 150, 160, 170, 180, 190},
+               {0,0,0,0,0,0,0,0,0,0},{0,0,0,0,0,0,0,0,0,0},0,0.90f,0.10f,0.00f,120},
     {"i",  200,{280,2230,2900,3300,4300,5300,6300,7300,8300,9300},
-               { 60, 100, 110, 130, 140, 150, 160, 170, 180, 190},0.90f,0.10f,0.00f,120},
+               { 60, 100, 110, 130, 140, 150, 160, 170, 180, 190},
+               {0,0,0,0,0,0,0,0,0,0},{0,0,0,0,0,0,0,0,0,0},0,0.90f,0.10f,0.00f,120},
     {"o",  250,{600, 800,2500,3300,4300,5300,6300,7300,8300,9300},
-               {120, 150, 120, 140, 150, 160, 170, 180, 190, 200},0.90f,0.10f,0.00f,115},
+               {120, 150, 120, 140, 150, 160, 170, 180, 190, 200},
+               {0,0,0,0,0,0,0,0,0,0},{0,0,0,0,0,0,0,0,0,0},0,0.90f,0.10f,0.00f,115},
     {"u",  220,{300, 800,2200,3200,4200,5200,6200,7200,8200,9200},
-               { 80, 130, 110, 130, 140, 150, 160, 170, 180, 190},0.90f,0.10f,0.00f,115},
+               { 80, 130, 110, 130, 140, 150, 160, 170, 180, 190},
+               {0,0,0,0,0,0,0,0,0,0},{0,0,0,0,0,0,0,0,0,0},0,0.90f,0.10f,0.00f,115},
     {"ae", 240,{750,1400,2700,3600,4600,5600,6600,7600,8600,9600},
-               {120, 150, 120, 140, 150, 160, 170, 180, 190, 200},0.90f,0.10f,0.00f,120},
+               {120, 150, 120, 140, 150, 160, 170, 180, 190, 200},
+               {0,0,0,0,0,0,0,0,0,0},{0,0,0,0,0,0,0,0,0,0},0,0.90f,0.10f,0.00f,120},
     {"ah", 230,{800,1200,2700,3500,4500,5500,6500,7500,8500,9500},
-               {130, 150, 120, 140, 150, 160, 170, 180, 190, 200},0.90f,0.10f,0.00f,118},
+               {130, 150, 120, 140, 150, 160, 170, 180, 190, 200},
+               {0,0,0,0,0,0,0,0,0,0},{0,0,0,0,0,0,0,0,0,0},0,0.90f,0.10f,0.00f,118},
     {"aw", 260,{600, 900,2500,3300,4300,5300,6300,7300,8300,9300},
-               {120, 150, 120, 140, 150, 160, 170, 180, 190, 200},0.90f,0.10f,0.00f,115},
+               {120, 150, 120, 140, 150, 160, 170, 180, 190, 200},
+               {0,0,0,0,0,0,0,0,0,0},{0,0,0,0,0,0,0,0,0,0},0,0.90f,0.10f,0.00f,115},
     {"er", 220,{500,1500,1900,3400,4300,5300,6300,7300,8300,9300},
-               {100, 140, 110, 130, 140, 150, 160, 170, 180, 190},0.90f,0.10f,0.00f,118},
+               {100, 140, 110, 130, 140, 150, 160, 170, 180, 190},
+               {0,0,0,0,0,0,0,0,0,0},{0,0,0,0,0,0,0,0,0,0},0,0.90f,0.10f,0.00f,118},
     {"ih", 180,{400,1700,2600,3300,4300,5300,6300,7300,8300,9300},
-               {100, 130, 110, 130, 140, 150, 160, 170, 180, 190},0.90f,0.10f,0.00f,120},
+               {100, 130, 110, 130, 140, 150, 160, 170, 180, 190},
+               {0,0,0,0,0,0,0,0,0,0},{0,0,0,0,0,0,0,0,0,0},0,0.90f,0.10f,0.00f,120},
     {"uh", 200,{600,1000,2400,3300,4300,5300,6300,7300,8300,9300},
-               {110, 130, 110, 130, 140, 150, 160, 170, 180, 190},0.90f,0.10f,0.00f,118},
+               {110, 130, 110, 130, 140, 150, 160, 170, 180, 190},
+               {0,0,0,0,0,0,0,0,0,0},{0,0,0,0,0,0,0,0,0,0},0,0.90f,0.10f,0.00f,118},
+    /* Nasals - with antipoles for nasal formants */
     {"m",   80,{280, 700,2200,3000,4200,5200,6200,7200,8200,9200},
-                { 80, 250, 300, 300, 400, 400, 400, 400, 400, 400},0.90f,0.00f,0.00f,115},
+                { 80, 250, 300, 300, 400, 400, 400, 400, 400, 400},
+                {0, 500, 0,0,0,0,0,0,0,0},{0, 100, 0,0,0,0,0,0,0,0},1,0.90f,0.00f,0.00f,115},
     {"n",   80,{280,1700,2400,3200,4200,5200,6200,7200,8200,9200},
-                { 80, 250, 300, 300, 400, 400, 400, 400, 400, 400},0.90f,0.00f,0.00f,115},
+                { 80, 250, 300, 300, 400, 400, 400, 400, 400, 400},
+                {0, 1400, 0,0,0,0,0,0,0,0},{0, 150, 0,0,0,0,0,0,0,0},1,0.90f,0.00f,0.00f,115},
     {"ng", 100,{280,1000,2700,3500,4300,5300,6300,7300,8300,9300},
-            { 80, 200, 300, 300, 400, 400, 400, 400, 400, 400},0.90f,0.00f,0.00f,115},
+            { 80, 200, 300, 300, 400, 400, 400, 400, 400, 400},
+            {0, 800, 0,0,0,0,0,0,0,0},{0, 120, 0,0,0,0,0,0,0,0},1,0.90f,0.00f,0.00f,115},
+    /* Liquids and glides */
     {"l",  120,{360,1000,2500,3400,4400,5400,6400,7400,8400,9400},
-               { 80, 130, 110, 130, 140, 150, 160, 170, 180, 190},0.85f,0.05f,0.00f,115},
+               { 80, 130, 110, 130, 140, 150, 160, 170, 180, 190},
+               {0,0,0,0,0,0,0,0,0,0},{0,0,0,0,0,0,0,0,0,0},0,0.85f,0.05f,0.00f,115},
     {"r",  120,{460,1100,1650,3400,4400,5400,6400,7400,8400,9400},
-               { 80, 130, 110, 130, 140, 150, 160, 170, 180, 190},0.85f,0.05f,0.00f,115},
+               { 80, 130, 110, 130, 140, 150, 160, 170, 180, 190},
+               {0,0,0,0,0,0,0,0,0,0},{0,0,0,0,0,0,0,0,0,0},0,0.85f,0.05f,0.00f,115},
     {"w",  100,{300, 600,2200,3200,4200,5200,6200,7200,8200,9200},
-               { 80, 130, 110, 130, 140, 150, 160, 170, 180, 190},0.85f,0.05f,0.00f,115},
+               { 80, 130, 110, 130, 140, 150, 160, 170, 180, 190},
+               {0,0,0,0,0,0,0,0,0,0},{0,0,0,0,0,0,0,0,0,0},0,0.85f,0.05f,0.00f,115},
     {"y",  100,{240,2100,3100,3600,4500,5500,6500,7500,8500,9500},
-               { 80, 130, 110, 130, 140, 150, 160, 170, 180, 190},0.85f,0.05f,0.00f,115},
+               { 80, 130, 110, 130, 140, 150, 160, 170, 180, 190},
+               {0,0,0,0,0,0,0,0,0,0},{0,0,0,0,0,0,0,0,0,0},0,0.85f,0.05f,0.00f,115},
+    /* Fricatives - tuned for distinct sounds */
     {"v",  120,{220, 700,2200,3200,4200,5200,6200,7200,8200,9200},
-               {100, 120, 110, 130, 140, 150, 160, 170, 180, 190},0.50f,0.10f,0.50f,110},
+               {100, 120, 110, 130, 140, 150, 160, 170, 180, 190},
+               {0,0,0,0,0,0,0,0,0,0},{0,0,0,0,0,0,0,0,0,0},0,0.50f,0.10f,0.50f,110},
     {"z",  120,{220,1700,2400,3200,4200,5200,6200,7200,8200,9200},
-               {100, 120, 200, 300, 400, 400, 400, 400, 400, 400},0.50f,0.10f,0.60f,110},
+               {100, 120, 200, 300, 400, 400, 400, 400, 400, 400},
+               {0,0,0,0,0,0,0,0,0,0},{0,0,0,0,0,0,0,0,0,0},0,0.50f,0.10f,0.60f,110},
     {"zh", 120,{220,1000,2200,3200,4200,5200,6200,7200,8200,9200},
-               {100, 200, 300, 300, 400, 400, 400, 400, 400, 400},0.50f,0.10f,0.60f,110},
+               {100, 200, 300, 300, 400, 400, 400, 400, 400, 400},
+               {0,0,0,0,0,0,0,0,0,0},{0,0,0,0,0,0,0,0,0,0},0,0.50f,0.10f,0.60f,110},
     {"dh", 100,{220,1100,2200,3200,4200,5200,6200,7200,8200,9200},
-               {100, 200, 300, 300, 400, 400, 400, 400, 400, 400},0.50f,0.10f,0.40f,110},
+               {100, 200, 300, 300, 400, 400, 400, 400, 400, 400},
+               {0,0,0,0,0,0,0,0,0,0},{0,0,0,0,0,0,0,0,0,0},0,0.50f,0.10f,0.40f,110},
     {"f",  120,{200, 900,2100,3000,4000,5000,6000,7000,8000,9000},
-               {200, 300, 300, 400, 400, 400, 400, 400, 400, 400},0.00f,0.30f,0.80f,  0},
-    {"s",  130,{200,1700,2400,3200,4200,5200,6200,7200,8200,9200},
-               {200, 400, 500, 500, 500, 500, 500, 500, 500, 500},0.00f,0.10f,0.90f,  0},
-    {"sh", 130,{200,1000,2200,3200,4200,5200,6200,7200,8200,9200},
-               {200, 400, 500, 500, 500, 500, 500, 500, 500, 500},0.00f,0.20f,0.80f,  0},
+               {200, 300, 300, 400, 400, 400, 400, 400, 400, 400},
+               {0,0,0,0,0,0,0,0,0,0},{0,0,0,0,0,0,0,0,0,0},0,0.00f,0.30f,0.80f,  0},
+    {"s",  130,{200,3800,4800,6000,7000,8000,9000,10000,11000,12000},
+               {200, 800, 900,1000,1000,1000,1000,1000,1000,1000},
+               {0,0,0,0,0,0,0,0,0,0},{0,0,0,0,0,0,0,0,0,0},0,0.00f,0.10f,0.90f,  0},
+    {"sh", 130,{200,1800,2800,3800,4800,5800,6800,7800,8800,9800},
+               {200, 600, 700, 800, 800, 800, 800, 800, 800, 800},
+               {0,0,0,0,0,0,0,0,0,0},{0,0,0,0,0,0,0,0,0,0},0,0.00f,0.20f,0.80f,  0},
     {"th", 130,{200, 900,2200,3200,4200,5200,6200,7200,8200,9200},
-               {300, 400, 500, 500, 500, 500, 500, 500, 500, 500},0.00f,0.20f,0.60f,  0},
+               {300, 400, 500, 500, 500, 500, 500, 500, 500, 500},
+               {0,0,0,0,0,0,0,0,0,0},{0,0,0,0,0,0,0,0,0,0},0,0.00f,0.20f,0.60f,  0},
     {"h",   80,{700,1200,2600,3500,4500,5500,6500,7500,8500,9500},
-               {200, 300, 300, 400, 400, 400, 400, 400, 400, 400},0.00f,0.20f,0.00f,  0},
+               {200, 300, 300, 400, 400, 400, 400, 400, 400, 400},
+               {0,0,0,0,0,0,0,0,0,0},{0,0,0,0,0,0,0,0,0,0},0,0.00f,0.20f,0.00f,  0},
+    /* Voiced plosives */
     {"b",   80,{200, 900,2100,3100,4100,5100,6100,7100,8100,9100},
-               {200, 300, 300, 400, 400, 400, 400, 400, 400, 400},0.70f,0.40f,0.60f, 80},
+               {200, 300, 300, 400, 400, 400, 400, 400, 400, 400},
+               {0,0,0,0,0,0,0,0,0,0},{0,0,0,0,0,0,0,0,0,0},0,0.70f,0.40f,0.60f, 80},
     {"d",   80,{300,1700,2500,3300,4300,5300,6300,7300,8300,9300},
-               {200, 300, 300, 400, 400, 400, 400, 400, 400, 400},0.70f,0.40f,0.50f, 80},
+               {200, 300, 300, 400, 400, 400, 400, 400, 400, 400},
+               {0,0,0,0,0,0,0,0,0,0},{0,0,0,0,0,0,0,0,0,0},0,0.70f,0.40f,0.50f, 80},
     {"g",   80,{260,1600,2200,3200,4200,5200,6200,7200,8200,9200},
-               {200, 300, 300, 400, 400, 400, 400, 400, 400, 400},0.70f,0.40f,0.50f, 80},
+               {200, 300, 300, 400, 400, 400, 400, 400, 400, 400},
+               {0,0,0,0,0,0,0,0,0,0},{0,0,0,0,0,0,0,0,0,0},0,0.70f,0.40f,0.50f, 80},
+    /* Voiceless plosives */
     {"p",   80,{200, 900,2100,3100,4100,5100,6100,7100,8100,9100},
-               {200, 300, 300, 400, 400, 400, 400, 400, 400, 400},0.00f,0.80f,0.80f,  0},
+               {200, 300, 300, 400, 400, 400, 400, 400, 400, 400},
+               {0,0,0,0,0,0,0,0,0,0},{0,0,0,0,0,0,0,0,0,0},0,0.00f,0.80f,0.80f,  0},
     {"t",   80,{200,1700,2500,3300,4300,5300,6300,7300,8300,9300},
-               {200, 300, 300, 400, 400, 400, 400, 400, 400, 400},0.00f,0.80f,0.70f,  0},
+               {200, 300, 300, 400, 400, 400, 400, 400, 400, 400},
+               {0,0,0,0,0,0,0,0,0,0},{0,0,0,0,0,0,0,0,0,0},0,0.00f,0.80f,0.70f,  0},
     {"k",   80,{200,1600,2200,3200,4200,5200,6200,7200,8200,9200},
-               {200, 300, 300, 400, 400, 400, 400, 400, 400, 400},0.00f,0.80f,0.70f,  0},
-    {"ch", 100,{200,1600,2200,3200,4200,5200,6200,7200,8200,9200},
-               {200, 300, 300, 400, 400, 400, 400, 400, 400, 400},0.00f,0.60f,0.80f,  0},
-    {"jh", 100,{200,1600,2200,3200,4200,5200,6200,7200,8200,9200},
-               {200, 300, 300, 400, 400, 400, 400, 400, 400, 400},0.50f,0.50f,0.70f, 80},
+               {200, 300, 300, 400, 400, 400, 400, 400, 400, 400},
+               {0,0,0,0,0,0,0,0,0,0},{0,0,0,0,0,0,0,0,0,0},0,0.00f,0.80f,0.70f,  0},
+    /* Affricates - with proper TSH and DZH characteristics */
+    {"ch", 100,{200,1600,2200,4500,5500,6500,7500,8500,9500,10500},
+               {200, 300, 300, 600, 600, 600, 600, 600, 600, 600},
+               {0,0,0,0,0,0,0,0,0,0},{0,0,0,0,0,0,0,0,0,0},0,0.00f,0.40f,0.85f,  0},
+    {"jh", 100,{200,1600,2200,4500,5500,6500,7500,8500,9500,10500},
+               {200, 300, 300, 600, 600, 600, 600, 600, 600, 600},
+               {0,0,0,0,0,0,0,0,0,0},{0,0,0,0,0,0,0,0,0,0},0,0.50f,0.30f,0.75f, 80},
+    /* Silence/pause */
     {"_",   80,{700,1220,2600,3540,4500,5500,6500,7500,8500,9500},
-               {110, 130, 110, 130, 140, 150, 160, 170, 180, 190},0.00f,0.00f,0.00f,  0},
+               {110, 130, 110, 130, 140, 150, 160, 170, 180, 190},
+               {0,0,0,0,0,0,0,0,0,0},{0,0,0,0,0,0,0,0,0,0},0,0.00f,0.00f,0.00f,  0},
     {"SIL", 80,{700,1220,2600,3540,4500,5500,6500,7500,8500,9500},
-               {110, 130, 110, 130, 140, 150, 160, 170, 180, 190},0.00f,0.00f,0.00f,  0},
+               {110, 130, 110, 130, 140, 150, 160, 170, 180, 190},
+               {0,0,0,0,0,0,0,0,0,0},{0,0,0,0,0,0,0,0,0,0},0,0.00f,0.00f,0.00f,  0},
 };
 static const int g_phoneme_db_size =
     (int)(sizeof(g_phoneme_db) / sizeof(g_phoneme_db[0]));
@@ -287,6 +335,11 @@ typedef struct {
     float aspiration_amp;
     float frication_amp;
     int   plosive_type;                                                    
+    
+    /* Anti-pole (zero) parameters for nasal formants */
+    float antipole_freq[MAX_FORMANTS];
+    float antipole_bw[MAX_FORMANTS];
+    int   use_antipoles;
 
     /* Coarticulation parameters */
     float coart_strength;      /* 0.0 = none, 1.0 = full coarticulation */
@@ -639,7 +692,9 @@ static int phoneme_parse(const char *path, PhonemeData *pd)
         if (strncasecmp(p,"SAMPLE_RATE",11)==0){ pd->sample_rate=atoi(p+12); continue; }
         if (strncasecmp(p,"SYNTHESIS_MODE",14)==0){
             char *v=p+15; while(*v==' '||*v=='\t')v++;
-            pd->filter_mode=strncasecmp(v,"parallel",8)==0?FILTER_PARALLEL:FILTER_CASCADE;
+            if(strncasecmp(v,"parallel",8)==0) pd->filter_mode=FILTER_PARALLEL;
+            else if(strncasecmp(v,"hybrid",6)==0) pd->filter_mode=FILTER_HYBRID;
+            else pd->filter_mode=FILTER_CASCADE;
             continue;
         }
         if (strncasecmp(p,"TEMPO",5)==0){ pd->tempo=clampf((float)atof(p+6),0.25f,4.0f); continue; }
@@ -657,76 +712,146 @@ static int phoneme_parse(const char *path, PhonemeData *pd)
         PhonemeInst *ph = &pd->phonemes[pd->nphon];
         memset(ph,0,sizeof(*ph));
 
+        /* New flexible format: parse all tokens as potential phonemes */
         char *ptr = p;
-        char *tok = nxtok(&ptr); if (!tok) continue;
-        strncpy(ph->name, tok, sizeof(ph->name)-1);
-
-        tok = nxtok(&ptr); if (!tok) continue;
-        ph->duration_ms = (float)atof(tok);
-        if (pd->tempo > 1e-4f) ph->duration_ms /= pd->tempo;
-
-        const PhonemeDBEntry *dbe = find_phoneme_db(ph->name);
-        if (dbe) {
-            for(int k=0;k<FORMANTS;k++){
-                ph->target_freq[k]=dbe->freq[k];
-                ph->target_bw  [k]=dbe->bw  [k];
+        int phoneme_count_in_line = 0;
+        
+        /* First pass: count phonemes in this line */
+        char *count_ptr = ptr;
+        char *test_tok;
+        while ((test_tok = nxtok(&count_ptr)) != NULL) {
+            /* Check if this token is a duration (number) or a directive */
+            char *endp;
+            float test_val = strtof(test_tok, &endp);
+            if (endp != test_tok && (*endp == '\0' || *endp == ':')) {
+                /* This is a duration or pitch point, stop counting phonemes */
+                break;
             }
-            ph->voicing_amp    = dbe->voicing_amp;
-            ph->aspiration_amp = dbe->aspiration_amp;
-            ph->frication_amp  = dbe->frication_amp;
-            {
-                const char *n = ph->name;
-                if (strcasecmp(n,"p")==0||strcasecmp(n,"t")==0||strcasecmp(n,"k")==0)
-                    ph->plosive_type = 1;                 
-                else if (strcasecmp(n,"b")==0||strcasecmp(n,"d")==0||strcasecmp(n,"g")==0)
-                    ph->plosive_type = 2;              
-                else
-                    ph->plosive_type = 0;
+            if (strncasecmp(test_tok,"SAMPLE_RATE",11)==0 || 
+                strncasecmp(test_tok,"SYNTHESIS_MODE",14)==0 ||
+                strncasecmp(test_tok,"TEMPO",5)==0 ||
+                strncasecmp(test_tok,"PHONEME_SET",11)==0 ||
+                strncasecmp(test_tok,"VOICE_TYPE",10)==0) {
+                break;
             }
-            /* Initialize coarticulation and GCI parameters with defaults */
-            ph->coart_strength      = 0.5f;  /* Moderate coarticulation by default */
-            ph->onset_duration_pct  = 20.0f; /* 20% onset transition */
-            ph->offset_duration_pct = 20.0f; /* 20% offset transition */
-            ph->gci_position        = 0.7f;  /* Typical glottal closure position */
-            ph->gci_skew            = 1.0f;  /* No skew by default */
-            ph->use_gci_timing      = 0;     /* Disabled by default */
-        } else {
-            /* Initialize coarticulation and GCI parameters with defaults for unknown phonemes */
-            ph->coart_strength      = 0.3f;  /* Less coarticulation for unknown sounds */
-            ph->onset_duration_pct  = 15.0f; 
-            ph->offset_duration_pct = 15.0f; 
-            ph->gci_position        = 0.7f;  
-            ph->gci_skew            = 1.0f;  
-            ph->use_gci_timing      = 0;     
-
-            float df[]={700,1220,2600,3540,4500,5500,6500,7500,8500,9500};
-            float db[]={110, 130, 110, 130, 140, 150, 160, 170, 180, 190};
-            for(int k=0;k<FORMANTS;k++){ph->target_freq[k]=df[k];ph->target_bw[k]=db[k];}
-            ph->voicing_amp=0.8f; ph->aspiration_amp=0.2f;
+            phoneme_count_in_line++;
         }
+        
+        /* Reset pointer and parse phonemes */
+        ptr = p;
+        for (int pli = 0; pli < phoneme_count_in_line && pd->nphon < MAX_PHONEMES; pli++) {
+            ph = &pd->phonemes[pd->nphon];
+            memset(ph,0,sizeof(*ph));
+            
+            char *tok = nxtok(&ptr); if (!tok) break;
+            strncpy(ph->name, tok, sizeof(ph->name)-1);
 
-        int fi = 0;
-        while ((tok = nxtok(&ptr)) != NULL) {
-            if (strchr(tok,':') && !strchr(tok,'/')) {
-                if (ph->n_pitch < MAX_PITCH_POINTS)
-                    parse_pitch_pt(tok, &ph->pitch_points[ph->n_pitch++]);
-            } else if (strchr(tok,'/')) {
-                if (fi < FORMANTS) {
-                    parse_formant_pair(tok,
-                        &ph->target_freq[fi], &ph->target_bw[fi]);
-                    fi++;
+            /* Check next token for duration */
+            tok = nxtok(&ptr);
+            if (!tok) {
+                /* No duration specified, use default from DB */
+                const PhonemeDBEntry *dbe_default = find_phoneme_db(ph->name);
+                ph->duration_ms = dbe_default ? dbe_default->dur_ms : 100.0f;
+                if (pd->tempo > 1e-4f) ph->duration_ms /= pd->tempo;
+            } else {
+                char *endp;
+                float test_val = strtof(tok, &endp);
+                if (endp != tok && (*endp == '\0' || *endp == ':')) {
+                    /* This is a duration or pitch point */
+                    ph->duration_ms = test_val;
+                    if (pd->tempo > 1e-4f) ph->duration_ms /= pd->tempo;
+                    /* Put back the token for pitch point parsing */
+                    ptr -= strlen(tok);
+                    tok = NULL;
+                } else {
+                    /* This is another phoneme name */
+                    ph->duration_ms = 100.0f; /* default */
+                    if (pd->tempo > 1e-4f) ph->duration_ms /= pd->tempo;
+                    /* Don't consume this token, it's the next phoneme */
+                    ptr -= strlen(tok);
                 }
             }
-        }
 
-        if (ph->n_pitch == 0) {
-            float f0d = (dbe && dbe->f0_default>0) ? dbe->f0_default : 120.0f;
-            ph->pitch_points[0] = (PitchPoint){0.0f,   f0d};
-            ph->pitch_points[1] = (PitchPoint){100.0f, f0d};
-            ph->n_pitch = 2;
-        }
+            const PhonemeDBEntry *dbe = find_phoneme_db(ph->name);
+            if (dbe) {
+                for(int k=0;k<FORMANTS;k++){
+                    ph->target_freq[k]=dbe->freq[k];
+                    ph->target_bw  [k]=dbe->bw  [k];
+                    ph->antipole_freq[k]=dbe->antipole_freq[k];
+                    ph->antipole_bw  [k]=dbe->antipole_bw  [k];
+                }
+                ph->use_antipoles  = dbe->use_antipoles;
+                ph->voicing_amp    = dbe->voicing_amp;
+                ph->aspiration_amp = dbe->aspiration_amp;
+                ph->frication_amp  = dbe->frication_amp;
+                {
+                    const char *n = ph->name;
+                    /* Handle new plosive types with M suffix (mute stops) */
+                    int is_mute = 0;
+                    char base_name[16];
+                    strncpy(base_name, n, sizeof(base_name)-1);
+                    base_name[sizeof(base_name)-1] = '\0';
+                    size_t len = strlen(base_name);
+                    if (len > 0 && (base_name[len-1] == 'M' || base_name[len-1] == 'm')) {
+                        is_mute = 1;
+                        base_name[len-1] = '\0';
+                        len--;
+                    }
+                    
+                    if (strcasecmp(base_name,"p")==0||strcasecmp(base_name,"t")==0||strcasecmp(base_name,"k")==0||
+                        strcasecmp(base_name,"tm")==0||strcasecmp(base_name,"pm")==0||strcasecmp(base_name,"km")==0||
+                        strcasecmp(base_name,"dm")==0||strcasecmp(base_name,"bm")==0||strcasecmp(base_name,"gm")==0)
+                        ph->plosive_type = is_mute ? 3 : 1;                 
+                    else if (strcasecmp(base_name,"b")==0||strcasecmp(base_name,"d")==0||strcasecmp(base_name,"g")==0)
+                        ph->plosive_type = 2;              
+                    else
+                        ph->plosive_type = 0;
+                }
+                /* Initialize coarticulation and GCI parameters with defaults */
+                ph->coart_strength      = 0.5f;  /* Moderate coarticulation by default */
+                ph->onset_duration_pct  = 20.0f; /* 20% onset transition */
+                ph->offset_duration_pct = 20.0f; /* 20% offset transition */
+                ph->gci_position        = 0.7f;  /* Typical glottal closure position */
+                ph->gci_skew            = 1.0f;  /* No skew by default */
+                ph->use_gci_timing      = 0;     /* Disabled by default */
+            } else {
+                /* Initialize coarticulation and GCI parameters with defaults for unknown phonemes */
+                ph->coart_strength      = 0.3f;  /* Less coarticulation for unknown sounds */
+                ph->onset_duration_pct  = 15.0f; 
+                ph->offset_duration_pct = 15.0f; 
+                ph->gci_position        = 0.7f;  
+                ph->gci_skew            = 1.0f;  
+                ph->use_gci_timing      = 0;     
 
-        pd->nphon++;
+                float df[]={700,1220,2600,3540,4500,5500,6500,7500,8500,9500};
+                float db[]={110, 130, 110, 130, 140, 150, 160, 170, 180, 190};
+                for(int k=0;k<FORMANTS;k++){ph->target_freq[k]=df[k];ph->target_bw[k]=db[k];}
+                ph->voicing_amp=0.8f; ph->aspiration_amp=0.2f;
+            }
+
+            int fi = 0;
+            while ((tok = nxtok(&ptr)) != NULL) {
+                if (strchr(tok,':') && !strchr(tok,'/')) {
+                    if (ph->n_pitch < MAX_PITCH_POINTS)
+                        parse_pitch_pt(tok, &ph->pitch_points[ph->n_pitch++]);
+                } else if (strchr(tok,'/')) {
+                    if (fi < FORMANTS) {
+                        parse_formant_pair(tok,
+                            &ph->target_freq[fi], &ph->target_bw[fi]);
+                        fi++;
+                    }
+                }
+            }
+
+            if (ph->n_pitch == 0) {
+                float f0d = (dbe && dbe->f0_default>0) ? dbe->f0_default : 120.0f;
+                ph->pitch_points[0] = (PitchPoint){0.0f,   f0d};
+                ph->pitch_points[1] = (PitchPoint){100.0f, f0d};
+                ph->n_pitch = 2;
+            }
+
+            pd->nphon++;
+        }
     }
     fclose(fp);
 
@@ -999,10 +1124,15 @@ static int synthesize(SynthState *st, float **out, int *out_n)
         if (f0 > 0.0f) f0 = clampf(f0, 40.0f, 500.0f);
 
         int cascade = (st->filter_mode == FILTER_CASCADE);
+        int parallel = (st->filter_mode == FILTER_PARALLEL);
+        int hybrid = (st->filter_mode == FILTER_HYBRID);
+        
         for(int k=0;k<FORMANTS;k++){
+            /* For hybrid mode: formants 1-3 use parallel coeffs, 4+ use cascade */
+            int use_cascade = hybrid ? (k >= 3) : cascade;
             formant_update(&st->formants[k], freq[k], bw[k],
                            fgain[k] > 0.0f ? fgain[k] : 1.0f,
-                           (float)sr, cascade);
+                           (float)sr, use_cascade);
         }
 
         float prev_sm_v = sm_v;
@@ -1029,13 +1159,35 @@ static int synthesize(SynthState *st, float **out, int *out_n)
         float excitation = v_sig + a_sig;
 
         float samp;
-        if (cascade) {
-            samp = excitation;
-            for(int k=0;k<FORMANTS;k++)
-                if(st->formants[k].freq > 0.0f)
-                    samp = formant_process(&st->formants[k], samp);
-            samp += fr_sig * 0.25f;                                    
+        if (cascade || hybrid) {
+            if (hybrid) {
+                /* Parallel-Serial Hybrid: Formants 1-3 in parallel, 4+ in cascade */
+                float parallel_sum = 0.0f;
+                /* Process formants 1-3 in parallel (for nasal/vowel brightness) */
+                for(int k=0; k<3 && k<FORMANTS; k++) {
+                    if(st->formants[k].freq > 0.0f)
+                        parallel_sum += formant_process(&st->formants[k], excitation);
+                }
+                /* Normalize parallel sum to prevent clipping */
+                parallel_sum /= 3.0f;
+                
+                /* Process formants 4+ in cascade (for natural spectral tilt) */
+                samp = parallel_sum;
+                for(int k=3; k<FORMANTS; k++) {
+                    if(st->formants[k].freq > 0.0f)
+                        samp = formant_process(&st->formants[k], samp);
+                }
+                samp += fr_sig * 0.25f;
+            } else {
+                /* Pure cascade mode */
+                samp = excitation;
+                for(int k=0;k<FORMANTS;k++)
+                    if(st->formants[k].freq > 0.0f)
+                        samp = formant_process(&st->formants[k], samp);
+                samp += fr_sig * 0.25f;
+            }
         } else {
+            /* Pure parallel mode */
             samp = 0.0f;
             for(int k=0;k<FORMANTS;k++)
                 if(st->formants[k].freq > 0.0f)
